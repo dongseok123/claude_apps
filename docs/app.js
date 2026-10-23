@@ -547,6 +547,7 @@ function openTalk(scenario, expressions) {
   $talk.innerHTML = `
     <div class="talk-top">
       <span class="talk-title">${esc(scenario.title)}</span>
+      <button type="button" class="pill-btn" data-action="talk-replay" aria-label="상대 말 다시 듣기">${ICON.speaker}</button>
       <button type="button" class="pill-btn" data-action="talk-rate" id="talk-rate" aria-label="원어민 말하기 속도 바꾸기"></button>
       <button type="button" class="pill-btn accent" data-action="talk-hints" id="talk-used"></button>
     </div>
@@ -582,13 +583,13 @@ function updateTalk() {
   const name = c.scenario.partnerName;
   const status = {
     idle: '준비 중…',
-    listening: '듣고 있어요 · 편하게 말하세요',
+    listening: c.micReady ? '듣고 있어요 · 편하게 말하세요' : '마이크 여는 중…',
     thinking: `${name} 생각 중…`,
     speaking: `${name} 말하는 중`,
   }[c.phase];
   const caption = {
     idle: '',
-    listening: '말을 멈추면 자동으로 답해요 · 탭하면 상대 말을 다시 들어요',
+    listening: '말을 멈추면 자동으로 답해요 · 말해도 반응이 없으면 가운데 버튼을 탭하세요',
     thinking: '탭하면 상대 말을 끊고 바로 말할 수 있어요',
     speaking: '탭하면 상대 말을 끊고 바로 말할 수 있어요',
   }[c.phase];
@@ -597,7 +598,7 @@ function updateTalk() {
   document.getElementById('talk-rate').textContent = rateLabel(settings.speechRate);
   document.getElementById('talk-used').textContent = `표현 ${c.used.size}/${c.expressions.length}`;
   const orb = document.getElementById('talk-orb');
-  orb.dataset.phase = c.phase;
+  orb.dataset.phase = c.phase === 'listening' && !c.micReady ? 'opening' : c.phase;
   orb.setAttribute('aria-label', caption || '준비 중');
   document.getElementById('talk-avatar').dataset.speaking = String(c.phase === 'speaking');
 
@@ -904,9 +905,10 @@ const actions = {
 
   'talk-orb': () => {
     if (!conversation) return;
-    if (conversation.phase === 'listening') conversation.replayLast();
+    if (conversation.phase === 'listening') conversation.reopenMic();
     else conversation.interrupt();
   },
+  'talk-replay': () => conversation?.replayLast(),
   'talk-end': () => finishTalk(),
   'talk-rate': () => {
     const next = RATES[(RATES.indexOf(settings.speechRate) + 1) % RATES.length];

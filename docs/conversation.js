@@ -36,6 +36,7 @@ export class Conversation {
       },
       onUtterance: (text) => this.learnerSaid(text),
       onError: (code) => this.micFailed(code),
+      onStateChange: () => this.emit(),
     });
   }
 
@@ -92,6 +93,20 @@ export class Conversation {
     this.commit();
     this.lines = this.lines.filter((line) => line.role === 'user' || line.text);
     this.listen();
+  }
+
+  /** True when the microphone is open and waiting for the learner. */
+  get micReady() {
+    return this.phase === 'listening' && this.listener.hearing;
+  }
+
+  /** Reopens the microphone when it seems not to hear anything. */
+  reopenMic() {
+    if (this.phase !== 'listening') return;
+    this.heard = '';
+    this.error = '';
+    this.listener.restart();
+    this.emit();
   }
 
   replayLast() {

@@ -6,14 +6,25 @@ export const canSpeak = 'speechSynthesis' in window;
 /**
  * Listens for one utterance and reports it after a short pause.
  * Call start() again for the next one.
+ *
+ * iOS Safari stops hearing anything if a recognition session is aborted and a new
+ * one started right away, so this keeps one recognizer, ends each session with
+ * stop(), and only starts the next session after the previous one has ended.
  */
 export class Listener {
-  constructor({ lang = 'en-US', silenceMs = 1300, onPartial, onUtterance, onError }) {
-    Object.assign(this, { lang, silenceMs, onPartial, onUtterance, onError });
-    this.active = false;
+  constructor({ lang = 'en-US', silenceMs = 1300, onPartial, onUtterance, onError, onStateChange }) {
+    Object.assign(this, { lang, silenceMs, onPartial, onUtterance, onError, onStateChange });
+    this.active = false; // we want to hear the learner
+    this.running = false; // a browser session is open
     this.recognition = null;
     this.text = '';
-    this.timer = null;
+    this.silenceTimer = null;
+    this.startTimer = null;
+  }
+
+  /** True when the microphone is actually open and waiting for speech. */
+  get hearing() {
+    return this.active && this.running;
   }
 
   start() {
@@ -22,73 +33,105 @@ export class Listener {
       return;
     }
     this.active = true;
-    this.begin();
+    this.text = '';
+    this.schedule(300);
+  }
+
+  /** Reopens the microphone; call from a tap, which iOS trusts most. */
+  restart() {
+    if (!canListen) return;
+    this.active = true;
+    this.text = '';
+    clearTimeout(this.silenceTimer);
+    if (this.running) {
+      this.endSession();
+    } else {
+      clearTimeout(this.startTimer);
+      this.open();
+    }
   }
 
   stop() {
     this.active = false;
-    clearTimeout(this.timer);
     this.text = '';
-    this.release();
+    clearTimeout(this.silenceTimer);
+    clearTimeout(this.startTimer);
+    this.endSession();
+    this.onStateChange?.();
   }
 
-  begin() {
-    if (!this.active) return;
+  recognizer() {
+    if (this.recognition) return this.recognition;
     const recognition = new Recognition();
     recognition.lang = this.lang;
     recognition.continuous = true;
     recognition.interimResults = true;
-    this.recognition = recognition;
-    this.text = '';
 
+    recognition.onstart = () => {
+      this.running = true;
+      this.onStateChange?.();
+    };
     recognition.onresult = (event) => {
+      if (!this.active) return;
       let text = '';
       for (let i = 0; i < event.results.length; i += 1) text += event.results[i][0].transcript;
       text = text.trim();
       if (!text || text === this.text) return;
       this.text = text;
       this.onPartial?.(text);
-      clearTimeout(this.timer);
-      this.timer = setTimeout(() => this.finish(), this.silenceMs);
+      clearTimeout(this.silenceTimer);
+      this.silenceTimer = setTimeout(() => this.finish(), this.silenceMs);
     };
     recognition.onerror = (event) => {
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
         this.active = false;
         this.onError?.('not-allowed');
       }
+      // Other errors (no-speech, aborted, network) end the session; onend restarts it.
     };
     recognition.onend = () => {
-      if (this.recognition !== recognition) return;
-      // The browser ends recognition after a stretch of silence; keep listening.
+      this.running = false;
+      this.onStateChange?.();
+      if (!this.active) return;
+      // iOS often ends the session at a pause; treat what was heard as finished.
       if (this.text) this.finish();
-      else if (this.active) setTimeout(() => this.begin(), 250);
+      else this.schedule(300);
     };
+    this.recognition = recognition;
+    return recognition;
+  }
+
+  schedule(delay) {
+    clearTimeout(this.startTimer);
+    this.startTimer = setTimeout(() => this.open(), delay);
+  }
+
+  open() {
+    if (!this.active || this.running) return;
     try {
-      recognition.start();
+      this.recognizer().start();
+      this.running = true;
     } catch {
-      this.onError?.('start-failed');
+      // Still closing the last session; try again shortly.
+      this.schedule(400);
     }
   }
 
+  endSession() {
+    if (!this.running || !this.recognition) return;
+    try {
+      this.recognition.stop();
+    } catch {}
+  }
+
   finish() {
-    clearTimeout(this.timer);
+    clearTimeout(this.silenceTimer);
     const text = this.text.trim();
     this.text = '';
     this.active = false;
-    this.release();
+    this.endSession();
+    this.onStateChange?.();
     if (text) this.onUtterance?.(text);
-  }
-
-  release() {
-    const recognition = this.recognition;
-    this.recognition = null;
-    if (!recognition) return;
-    recognition.onresult = null;
-    recognition.onend = null;
-    recognition.onerror = null;
-    try {
-      recognition.abort();
-    } catch {}
   }
 }
 
