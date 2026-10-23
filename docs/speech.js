@@ -14,8 +14,12 @@ export const canSpeak = 'speechSynthesis' in window;
  * (iOS trusts a session started from a tap the most).
  */
 export class Listener {
-  constructor({ lang = 'en-US', silenceMs = 1300, onPartial, onUtterance, onError, onStateChange }) {
-    Object.assign(this, { lang, silenceMs, onPartial, onUtterance, onError, onStateChange });
+  /**
+   * autoReopen: reopen the mic by itself after a quiet stretch or a failed start.
+   * iPhone Safari only lets a tap open the mic, so it is off there.
+   */
+  constructor({ lang = 'en-US', silenceMs = 1300, autoReopen = true, onPartial, onUtterance, onError, onStateChange }) {
+    Object.assign(this, { lang, silenceMs, autoReopen, onPartial, onUtterance, onError, onStateChange });
     this.active = false; // we want to hear the learner
     this.session = null; // { recognition, started }
     this.text = '';
@@ -106,7 +110,7 @@ export class Listener {
       this.onStateChange?.();
       if (!this.active) return;
       if (this.text) this.finish();
-      else if (started) this.openLater(300); // a quiet stretch; keep listening
+      else if (started && this.autoReopen) this.openLater(300); // a quiet stretch; keep listening
       else this.failed();
     };
 
@@ -130,7 +134,7 @@ export class Listener {
 
   failed() {
     this.failures += 1;
-    if (this.failures >= 3) {
+    if (!this.autoReopen || this.failures >= 3) {
       // Ask for a tap rather than retrying forever.
       this.needsTap = true;
       this.onStateChange?.();

@@ -61,7 +61,16 @@ const EXAMPLES = [
   '식당에서 주문한 음식과 다른 게 나왔어',
 ];
 
-const settings = { dailyCount: 10, speechRate: 0.9, level: 'intermediate', ...store.get('settings', {}) };
+// iPhone and iPad browsers only let a tap open the microphone.
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+const settings = {
+  dailyCount: 10,
+  speechRate: 0.9,
+  level: 'intermediate',
+  listenMode: isIOS ? 'tap' : 'auto',
+  ...store.get('settings', {}),
+};
 const saveSettings = () => store.set('settings', settings);
 const apiKey = () => store.get('apiKey', '');
 
@@ -426,6 +435,10 @@ function renderSettings() {
     <button type="button" class="btn wide" data-action="preview-voice">${ICON.speaker}이 속도로 미리 듣기</button>
     <p class="footnote">대화 중에도 화면 위쪽 속도 버튼으로 바로 바꿀 수 있어요. 더 자연스러운 목소리는 iPhone 설정 &gt; 손쉬운 사용 &gt; 읽기 및 말하기 &gt; 음성 &gt; 영어(미국)에서 '향상된' 음성을 내려받으면 돼요.</p>
 
+    <h2 class="section-title">대화 방식</h2>
+    ${segmented('set-listen', [['tap', '탭하고 말하기'], ['auto', '자동으로 듣기']], settings.listenMode, '대화 방식')}
+    <p class="footnote">${isIOS ? 'iPhone Safari는 화면을 탭한 직후에만 마이크를 열 수 있어요. 그래서 내 차례마다 가운데 버튼을 한 번 탭하는 방식을 추천해요.' : '자동으로 듣기는 상대 말이 끝나면 마이크가 저절로 켜져요. 잘 안 되면 탭하고 말하기로 바꿔 주세요.'}</p>
+
     <h2 class="section-title">난이도</h2>
     ${segmented('set-level', LEVEL_ORDER.map((l) => [l, LEVELS[l].label]), settings.level, '난이도')}
     <p class="footnote">대화가 끝난 뒤 피드백 화면에서 고른 답에 따라 자동으로 바뀌어요.</p>
@@ -541,6 +554,7 @@ function openTalk(scenario, expressions) {
     level: LEVELS[settings.level].guide,
     rate: settings.speechRate,
     apiKey: apiKey(),
+    handsFree: settings.listenMode === 'auto',
     onChange: updateTalk,
   });
   $talk.className = 'talk';
@@ -583,15 +597,17 @@ function updateTalk() {
   const name = c.scenario.partnerName;
   const status = {
     idle: '준비 중…',
-    listening: c.micReady ? '듣고 있어요 · 편하게 말하세요' : c.micNeedsTap ? '가운데 버튼을 탭하고 말하세요' : '마이크 여는 중…',
+    listening: c.micReady ? '듣고 있어요 · 편하게 말하세요' : c.micNeedsTap ? '내 차례예요 · 가운데 버튼을 탭하고 말하세요' : '마이크 여는 중…',
     thinking: `${name} 생각 중…`,
     speaking: `${name} 말하는 중`,
   }[c.phase];
   const caption = {
     idle: '',
-    listening: c.micNeedsTap
-      ? '마이크가 스스로 열리지 않았어요 · 가운데 버튼을 탭하면 바로 들어요'
-      : '말을 멈추면 자동으로 답해요 · 말해도 반응이 없으면 가운데 버튼을 탭하세요',
+    listening: c.micReady
+      ? '말을 멈추면 자동으로 보내요 · 탭하면 바로 보내요'
+      : c.micNeedsTap
+        ? '탭하면 마이크가 켜져요'
+        : '잠시만요…',
     thinking: '탭하면 상대 말을 끊고 바로 말할 수 있어요',
     speaking: '탭하면 상대 말을 끊고 바로 말할 수 있어요',
   }[c.phase];
@@ -790,6 +806,13 @@ function toggleDictation() {
   dictation = new Listener({
     lang: 'ko-KR',
     silenceMs: 1600,
+    autoReopen: false,
+    onStateChange: () => {
+      if (dictation?.needsTap) {
+        stopDictation();
+        if (state.tab === 'situation') render();
+      }
+    },
     onPartial: (text) => {
       state.sit.text = text;
       const box = document.getElementById('sit-text');
@@ -809,14 +832,16 @@ function toggleDictation() {
     },
   });
   state.sit.listening = true;
-  dictation.start();
+  dictation.start({ fromTap: true });
   render();
 }
 
 function stopDictation() {
-  dictation?.stop();
+  // Clear the reference first: stop() reports a state change, which calls back here.
+  const listener = dictation;
   dictation = null;
   state.sit.listening = false;
+  listener?.stop();
 }
 
 function startSituationRolePlay() {
@@ -873,6 +898,11 @@ const actions = {
     saveSettings();
     render();
   },
+  'set-listen': (el) => {
+    settings.listenMode = el.dataset.value;
+    saveSettings();
+    render();
+  },
   'set-level': (el) => {
     settings.level = el.dataset.value;
     saveSettings();
@@ -907,8 +937,7 @@ const actions = {
 
   'talk-orb': () => {
     if (!conversation) return;
-    if (conversation.phase === 'listening') conversation.reopenMic();
-    else conversation.interrupt();
+    conversation.tap();
   },
   'talk-replay': () => conversation?.replayLast(),
   'talk-end': () => finishTalk(),

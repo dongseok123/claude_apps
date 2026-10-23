@@ -6,14 +6,16 @@ const SENTENCE_END = /[.!?]["')\]]*\s+/;
 export const normalize = (text) => String(text).toLowerCase().replace(/[’‘]/g, "'");
 
 /**
- * A hands-free role-play: listen until the learner pauses, ask Claude,
+ * A spoken role-play: listen until the learner pauses, ask Claude,
  * read the reply sentence by sentence, then listen again.
  * The microphone is off while the partner talks (so it never hears itself);
  * tapping the orb cuts the partner off.
+ * handsFree reopens the mic by itself after each reply; without it (iPhone Safari,
+ * which only lets a tap open the mic) the learner taps the orb once per turn.
  */
 export class Conversation {
-  constructor({ scenario, expressions, level, rate, apiKey, onChange }) {
-    Object.assign(this, { scenario, expressions, level, apiKey, onChange });
+  constructor({ scenario, expressions, level, rate, apiKey, handsFree, onChange }) {
+    Object.assign(this, { scenario, expressions, level, apiKey, handsFree, onChange });
     this.phase = 'idle';
     this.lines = [];
     this.heard = '';
@@ -30,6 +32,7 @@ export class Conversation {
     this.speaker.onDone = () => this.speakerDone();
     this.listener = new Listener({
       lang: 'en-US',
+      autoReopen: handsFree,
       onPartial: (text) => {
         this.heard = text;
         this.emit();
@@ -85,14 +88,33 @@ export class Conversation {
   }
 
   /** Cuts the partner off so the learner can talk. */
-  interrupt() {
+  interrupt({ fromTap = false } = {}) {
     if (this.phase !== 'speaking' && this.phase !== 'thinking') return;
     this.controller?.abort();
     this.streamDone = true;
     this.speaker.stop();
     this.commit();
     this.lines = this.lines.filter((line) => line.role === 'user' || line.text);
-    this.listen();
+    this.listen({ fromTap });
+  }
+
+  /**
+   * The orb: cuts the partner off and opens the mic, opens the mic when it is
+   * closed, or sends what was heard right away. Call from a tap.
+   */
+  tap() {
+    if (this.phase === 'speaking' || this.phase === 'thinking') {
+      this.interrupt({ fromTap: true });
+    } else if (this.phase === 'listening') {
+      if (this.listener.hearing && this.listener.text) {
+        this.listener.finish();
+      } else {
+        this.heard = '';
+        this.error = '';
+        this.listener.start({ fromTap: true });
+        this.emit();
+      }
+    }
   }
 
   /** True when the microphone is open and waiting for the learner. */
@@ -100,18 +122,9 @@ export class Conversation {
     return this.phase === 'listening' && this.listener.hearing;
   }
 
-  /** True when the microphone gave up opening by itself and needs a tap. */
+  /** True when the learner's turn is waiting for a tap to open the mic. */
   get micNeedsTap() {
-    return this.phase === 'listening' && this.listener.needsTap;
-  }
-
-  /** Reopens the microphone from a tap, for when it seems not to hear anything. */
-  reopenMic() {
-    if (this.phase !== 'listening') return;
-    this.heard = '';
-    this.error = '';
-    this.listener.start({ fromTap: true });
-    this.emit();
+    return this.phase === 'listening' && (!this.listener.active || this.listener.needsTap);
   }
 
   replayLast() {
@@ -136,10 +149,11 @@ export class Conversation {
     this.learnerSaid(clean);
   }
 
-  listen() {
+  listen({ fromTap = false } = {}) {
     this.heard = '';
     this.phase = 'listening';
-    this.listener.start();
+    if (this.handsFree || fromTap) this.listener.start({ fromTap });
+    else this.listener.stop();
     this.emit();
   }
 
