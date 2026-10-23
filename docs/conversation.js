@@ -156,7 +156,12 @@ export class Conversation {
       return;
     }
     this.heard = '';
-    this.error = '아무 말도 들리지 않았어요. 마이크 버튼을 누르고 다시 말해 주세요.';
+    const reasons = {
+      'audio-capture': '마이크 소리를 가져오지 못했어요. 다른 앱이 마이크를 쓰고 있지 않은지 확인해 주세요.',
+      network: '음성 인식에는 인터넷 연결이 필요해요. 연결을 확인해 주세요.',
+      'no-speech': '아무 소리가 들리지 않았어요. 마이크 가까이에서 말해 주세요.',
+    };
+    this.error = `${reasons[this.listener.lastError] || '말을 알아듣지 못했어요.'} 마이크 버튼을 누르고 다시 말해 주세요.`;
     this.emit();
   }
 
@@ -243,7 +248,7 @@ export class Conversation {
   micFailed(code) {
     this.error = code === 'unsupported'
       ? '이 브라우저는 음성 인식을 지원하지 않아요. iPhone의 Safari로 열어 주세요. 아래 입력칸에 글자로 답할 수도 있어요.'
-      : '마이크를 쓸 수 없어요. 마이크 권한을 허용하고 다시 시작해 주세요. 아래 입력칸에 글자로 답할 수도 있어요.';
+      : '음성 인식을 쓸 수 없어요. iPhone 설정 > Safari > 마이크를 허용하고, 설정 > 일반 > 키보드 > 받아쓰기 활성화를 켜 주세요. 아래 입력칸에 글자로 답할 수도 있어요.';
     this.emit();
   }
 

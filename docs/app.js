@@ -1,6 +1,6 @@
 import { askJSON, S } from './claude.js';
 import { Conversation } from './conversation.js';
-import { Listener, Speaker, canListen } from './speech.js';
+import { Listener, Speaker, canListen, logSpeech, speechLog, watchSpeechLog } from './speech.js';
 
 // ---------- Storage and settings ----------
 
@@ -571,6 +571,8 @@ function openTalk(scenario, expressions) {
       <button type="button" class="round end" data-action="talk-end" aria-label="대화 끝내기">${ICON.close}</button>
     </div>
     <p class="talk-caption" id="talk-caption"></p>
+    <button type="button" class="diag-toggle" data-action="talk-diag">마이크 진단 보기</button>
+    <pre class="talk-diag" id="talk-diag" hidden></pre>
     <form id="talk-form" class="talk-form" autocomplete="off">
       <label class="visually-hidden" for="talk-input">글자로 답하기</label>
       <input id="talk-input" placeholder="말 대신 글자로 답하기" autocapitalize="off" autocorrect="off" enterkeyhint="send">
@@ -579,6 +581,10 @@ function openTalk(scenario, expressions) {
   $talk.hidden = false;
   document.body.classList.add('locked');
   keepAwake(true);
+  const ios = navigator.userAgent.match(/OS (\d+[_\d]*)/);
+  logSpeech(`conversation opened${ios ? ` · iOS ${ios[1].replace(/_/g, '.')}` : ''} · recognizer ${canListen ? 'available' : 'missing'}`);
+  stopWatchingLog?.();
+  stopWatchingLog = watchSpeechLog(showDiagnostics);
   conversation.start();
   updateTalk();
 }
@@ -753,7 +759,18 @@ function renderFeedback() {
     </div>`;
 }
 
+let stopWatchingLog = null;
+
+function showDiagnostics() {
+  const $diag = document.getElementById('talk-diag');
+  if (!$diag || $diag.hidden) return;
+  $diag.textContent = speechLog.slice(-15).join('\n');
+  $diag.scrollTop = $diag.scrollHeight;
+}
+
 function closeTalk() {
+  stopWatchingLog?.();
+  stopWatchingLog = null;
   conversation?.end();
   conversation = null;
   state.feedback = null;
@@ -936,6 +953,12 @@ const actions = {
     conversation.tap();
   },
   'talk-replay': () => conversation?.replayLast(),
+  'talk-diag': (el) => {
+    const $diag = document.getElementById('talk-diag');
+    $diag.hidden = !$diag.hidden;
+    el.textContent = $diag.hidden ? '마이크 진단 보기' : '마이크 진단 숨기기';
+    showDiagnostics();
+  },
   'talk-end': () => finishTalk(),
   'talk-rate': () => {
     const next = RATES[(RATES.indexOf(settings.speechRate) + 1) % RATES.length];

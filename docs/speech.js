@@ -3,6 +3,22 @@ const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 export const canListen = Boolean(Recognition);
 export const canSpeak = 'speechSynthesis' in window;
 
+// A short record of what the recognizer and voice did, shown on the conversation
+// screen to work out problems on a real phone.
+const LOG_SIZE = 30;
+export const speechLog = [];
+const logWatchers = new Set();
+export function watchSpeechLog(fn) {
+  logWatchers.add(fn);
+  return () => logWatchers.delete(fn);
+}
+export function logSpeech(message) {
+  const time = new Date().toTimeString().slice(3, 8);
+  speechLog.push(`${time} ${message}`);
+  if (speechLog.length > LOG_SIZE) speechLog.shift();
+  logWatchers.forEach((fn) => fn());
+}
+
 /**
  * Push-to-talk: start() opens the mic (call it from a tap), finish() closes it
  * and reports everything heard (also from a tap). Nothing is sent on a pause.
@@ -32,7 +48,14 @@ export class Listener {
       return;
     }
     this.cancel();
+    // A voice still holding the audio can leave the mic deaf on iPhone.
+    if (canSpeak && (speechSynthesis.speaking || speechSynthesis.pending)) {
+      logSpeech('voice still active, cancelling');
+      speechSynthesis.cancel();
+    }
+    this.lastError = '';
     this.state = 'recording';
+    logSpeech(`mic start (${this.lang})`);
     this.open();
     this.onStateChange?.();
   }
@@ -40,6 +63,7 @@ export class Listener {
   /** Closes the mic and reports what was heard. Call from a tap. */
   finish() {
     if (this.state === 'finishing' || this.state === 'idle') return;
+    logSpeech(`mic finish, heard ${this.text.length} chars`);
     if (!this.session) {
       this.deliver();
       return;
@@ -53,7 +77,10 @@ export class Listener {
     clearTimeout(this.finishTimer);
     // iOS does not always report the end, so don't wait for it for long.
     this.finishTimer = setTimeout(() => {
-      if (this.state === 'finishing') this.deliver();
+      if (this.state === 'finishing') {
+        logSpeech('no end event after 1.5s, sending anyway');
+        this.deliver();
+      }
     }, 1500);
   }
 
@@ -81,15 +108,21 @@ export class Listener {
     this.session = session;
     const current = () => this.session === session;
 
+    for (const name of ['start', 'audiostart', 'soundstart', 'speechstart', 'speechend', 'soundend', 'audioend', 'nomatch']) {
+      recognition.addEventListener?.(name, () => logSpeech(`${current() ? '' : '(old) '}${name}`));
+    }
     recognition.onresult = (event) => {
-      if (!current()) return;
       let text = '';
       for (let i = 0; i < event.results.length; i += 1) text += event.results[i][0].transcript;
+      logSpeech(`${current() ? '' : '(old) '}result: "${text.trim().slice(0, 40)}"`);
+      if (!current()) return;
       this.current = text.trim();
       this.onPartial?.(this.text);
     };
     recognition.onerror = (event) => {
+      logSpeech(`${current() ? '' : '(old) '}error: ${event.error}${event.message ? ` (${event.message})` : ''}`);
       if (!current()) return;
+      this.lastError = event.error;
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
         this.cancel();
         this.onStateChange?.();
@@ -98,6 +131,7 @@ export class Listener {
       // Other errors end the session; onend handles it.
     };
     recognition.onend = () => {
+      logSpeech(`${current() ? '' : '(old) '}end`);
       if (!current()) return;
       this.session = null;
       this.saved = this.text;
@@ -113,7 +147,8 @@ export class Listener {
 
     try {
       recognition.start();
-    } catch {
+    } catch (error) {
+      logSpeech(`start failed: ${error.name}`);
       this.session = null;
       this.state = 'paused';
     }
@@ -192,7 +227,11 @@ export class Speaker {
       this.pending = Math.max(0, this.pending - 1);
       if (this.pending === 0) this.onDone?.();
     };
-    utterance.onend = done;
+    utterance.onstart = () => logSpeech('voice start');
+    utterance.onend = () => {
+      logSpeech('voice end');
+      done();
+    };
     utterance.onerror = done;
     this.pending += 1;
     speechSynthesis.speak(utterance);
