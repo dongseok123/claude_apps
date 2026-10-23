@@ -280,6 +280,7 @@ textarea { width: 100%; resize: vertical; line-height: 1.45; }
   background: var(--accent); color: #fff; box-shadow: 0 0 0 10px rgba(47, 91, 234, 0.22);
 }
 .orb svg { width: 34px; height: 34px; }
+.orb[data-phase="tap"] { background: var(--orange); color: #1a0d00; box-shadow: 0 0 0 10px rgba(240, 138, 36, 0.25); }
 .orb[data-phase="listening"] { background: var(--orange); color: #1a0d00; box-shadow: 0 0 0 10px rgba(240, 138, 36, 0.25); animation: breathe 1.6s ease-in-out infinite; }
 @keyframes breathe { 50% { box-shadow: 0 0 0 16px rgba(240, 138, 36, 0.1); } }
 .talk-caption { margin: 0; text-align: center; font-size: 0.8rem; color: var(--night-muted); min-height: 1.2em; }

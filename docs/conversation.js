@@ -100,12 +100,17 @@ export class Conversation {
     return this.phase === 'listening' && this.listener.hearing;
   }
 
-  /** Reopens the microphone when it seems not to hear anything. */
+  /** True when the microphone gave up opening by itself and needs a tap. */
+  get micNeedsTap() {
+    return this.phase === 'listening' && this.listener.needsTap;
+  }
+
+  /** Reopens the microphone from a tap, for when it seems not to hear anything. */
   reopenMic() {
     if (this.phase !== 'listening') return;
     this.heard = '';
     this.error = '';
-    this.listener.restart();
+    this.listener.start({ fromTap: true });
     this.emit();
   }
 

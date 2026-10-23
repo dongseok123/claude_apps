@@ -583,13 +583,15 @@ function updateTalk() {
   const name = c.scenario.partnerName;
   const status = {
     idle: '준비 중…',
-    listening: c.micReady ? '듣고 있어요 · 편하게 말하세요' : '마이크 여는 중…',
+    listening: c.micReady ? '듣고 있어요 · 편하게 말하세요' : c.micNeedsTap ? '가운데 버튼을 탭하고 말하세요' : '마이크 여는 중…',
     thinking: `${name} 생각 중…`,
     speaking: `${name} 말하는 중`,
   }[c.phase];
   const caption = {
     idle: '',
-    listening: '말을 멈추면 자동으로 답해요 · 말해도 반응이 없으면 가운데 버튼을 탭하세요',
+    listening: c.micNeedsTap
+      ? '마이크가 스스로 열리지 않았어요 · 가운데 버튼을 탭하면 바로 들어요'
+      : '말을 멈추면 자동으로 답해요 · 말해도 반응이 없으면 가운데 버튼을 탭하세요',
     thinking: '탭하면 상대 말을 끊고 바로 말할 수 있어요',
     speaking: '탭하면 상대 말을 끊고 바로 말할 수 있어요',
   }[c.phase];
@@ -598,7 +600,7 @@ function updateTalk() {
   document.getElementById('talk-rate').textContent = rateLabel(settings.speechRate);
   document.getElementById('talk-used').textContent = `표현 ${c.used.size}/${c.expressions.length}`;
   const orb = document.getElementById('talk-orb');
-  orb.dataset.phase = c.phase === 'listening' && !c.micReady ? 'opening' : c.phase;
+  orb.dataset.phase = c.micNeedsTap ? 'tap' : c.phase === 'listening' && !c.micReady ? 'opening' : c.phase;
   orb.setAttribute('aria-label', caption || '준비 중');
   document.getElementById('talk-avatar').dataset.speaking = String(c.phase === 'speaking');
 
