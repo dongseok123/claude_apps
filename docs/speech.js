@@ -4,163 +4,127 @@ export const canListen = Boolean(Recognition);
 export const canSpeak = 'speechSynthesis' in window;
 
 /**
- * Listens for one utterance and reports it after a short pause.
- * Call start() again for the next one.
+ * Push-to-talk: start() opens the mic (call it from a tap), finish() closes it
+ * and reports everything heard (also from a tap). Nothing is sent on a pause.
  *
- * iOS Safari's recognizer is unreliable between turns: sessions can stop hearing,
- * and it does not always report that a session ended. So every turn gets a fresh
- * recognizer, nothing ever waits for an "ended" event, a session that never
- * starts is replaced, and after repeated failures the listener asks for a tap
- * (iOS trusts a session started from a tap the most).
+ * iPhone Safari only gives a recognizer audio when it is started from a tap,
+ * and may close the mic by itself after a while; then the state becomes
+ * 'paused' and what was heard so far is kept for finish().
  */
 export class Listener {
-  /**
-   * autoReopen: reopen the mic by itself after a quiet stretch or a failed start.
-   * iPhone Safari only lets a tap open the mic, so it is off there.
-   */
-  constructor({ lang = 'en-US', silenceMs = 1300, autoReopen = true, onPartial, onUtterance, onError, onStateChange }) {
-    Object.assign(this, { lang, silenceMs, autoReopen, onPartial, onUtterance, onError, onStateChange });
-    this.active = false; // we want to hear the learner
-    this.session = null; // { recognition, started }
-    this.text = '';
-    this.failures = 0;
-    this.needsTap = false;
-    this.silenceTimer = null;
-    this.startTimer = null;
-    this.watchdog = null;
+  constructor({ lang = 'en-US', onPartial, onUtterance, onError, onStateChange }) {
+    Object.assign(this, { lang, onPartial, onUtterance, onError, onStateChange });
+    this.state = 'idle'; // idle | recording | finishing | paused
+    this.session = null;
+    this.saved = ''; // heard in sessions the browser already closed
+    this.current = ''; // heard in the open session
+    this.finishTimer = null;
   }
 
-  /** True when the microphone is actually open and waiting for speech. */
-  get hearing() {
-    return this.active && Boolean(this.session?.started);
+  get text() {
+    return [this.saved, this.current].filter(Boolean).join(' ').trim();
   }
 
-  /** Opens the microphone. Pass fromTap when called inside a tap handler. */
-  start({ fromTap = false } = {}) {
+  /** Opens the mic. Call from a tap. */
+  start() {
     if (!canListen) {
       this.onError?.('unsupported');
       return;
     }
-    this.active = true;
-    this.needsTap = false;
-    this.failures = 0;
-    this.text = '';
-    clearTimeout(this.silenceTimer);
-    this.closeSession();
-    if (fromTap) this.openSession();
-    else this.openLater(500);
-  }
-
-  stop() {
-    this.active = false;
-    this.text = '';
-    clearTimeout(this.silenceTimer);
-    clearTimeout(this.startTimer);
-    this.closeSession();
+    this.cancel();
+    this.state = 'recording';
+    this.open();
     this.onStateChange?.();
   }
 
-  openLater(delay) {
-    clearTimeout(this.startTimer);
-    this.startTimer = setTimeout(() => this.openSession(), delay);
+  /** Closes the mic and reports what was heard. Call from a tap. */
+  finish() {
+    if (this.state === 'finishing' || this.state === 'idle') return;
+    if (!this.session) {
+      this.deliver();
+      return;
+    }
+    this.state = 'finishing';
+    this.onStateChange?.();
+    // stop() lets the recognizer hand over its last words before it ends.
+    try {
+      this.session.recognition.stop();
+    } catch {}
+    clearTimeout(this.finishTimer);
+    // iOS does not always report the end, so don't wait for it for long.
+    this.finishTimer = setTimeout(() => {
+      if (this.state === 'finishing') this.deliver();
+    }, 1500);
   }
 
-  openSession() {
-    if (!this.active) return;
+  /** Turns the mic off and throws away what was heard. */
+  cancel() {
+    clearTimeout(this.finishTimer);
+    const session = this.session;
+    this.session = null;
+    this.state = 'idle';
+    this.saved = '';
+    this.current = '';
+    if (session) {
+      try {
+        session.recognition.stop();
+      } catch {}
+    }
+  }
+
+  open() {
     const recognition = new Recognition();
     recognition.lang = this.lang;
-    recognition.continuous = false;
+    recognition.continuous = true;
     recognition.interimResults = true;
-    const session = { recognition, started: false };
+    const session = { recognition };
     this.session = session;
     const current = () => this.session === session;
 
-    recognition.onstart = () => {
-      if (!current()) return;
-      session.started = true;
-      this.failures = 0;
-      this.onStateChange?.();
-    };
     recognition.onresult = (event) => {
-      if (!current() || !this.active) return;
+      if (!current()) return;
       let text = '';
       for (let i = 0; i < event.results.length; i += 1) text += event.results[i][0].transcript;
-      text = text.trim();
-      if (!text || text === this.text) return;
-      session.started = true;
-      this.text = text;
-      this.onPartial?.(text);
-      clearTimeout(this.silenceTimer);
-      this.silenceTimer = setTimeout(() => this.finish(), this.silenceMs);
+      this.current = text.trim();
+      this.onPartial?.(this.text);
     };
     recognition.onerror = (event) => {
       if (!current()) return;
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-        this.active = false;
-        this.closeSession();
+        this.cancel();
+        this.onStateChange?.();
         this.onError?.('not-allowed');
       }
-      // Other errors (no-speech, aborted, network) also end the session; onend handles it.
+      // Other errors end the session; onend handles it.
     };
     recognition.onend = () => {
       if (!current()) return;
-      const started = session.started;
       this.session = null;
-      clearTimeout(this.watchdog);
-      this.onStateChange?.();
-      if (!this.active) return;
-      if (this.text) this.finish();
-      else if (started && this.autoReopen) this.openLater(300); // a quiet stretch; keep listening
-      else this.failed();
+      this.saved = this.text;
+      this.current = '';
+      if (this.state === 'finishing') {
+        this.deliver();
+      } else if (this.state === 'recording') {
+        // The browser closed the mic before the learner tapped to finish.
+        this.state = 'paused';
+        this.onStateChange?.();
+      }
     };
 
     try {
       recognition.start();
     } catch {
       this.session = null;
-      this.failed();
-      return;
+      this.state = 'paused';
     }
-    // A session that never starts is stuck; replace it instead of waiting.
-    clearTimeout(this.watchdog);
-    this.watchdog = setTimeout(() => {
-      if (current() && !session.started) {
-        this.closeSession();
-        this.failed();
-      }
-    }, 2500);
+  }
+
+  deliver() {
+    clearTimeout(this.finishTimer);
+    const text = this.text;
+    this.cancel();
     this.onStateChange?.();
-  }
-
-  failed() {
-    this.failures += 1;
-    if (!this.autoReopen || this.failures >= 3) {
-      // Ask for a tap rather than retrying forever.
-      this.needsTap = true;
-      this.onStateChange?.();
-      return;
-    }
-    this.openLater(600);
-  }
-
-  closeSession() {
-    clearTimeout(this.watchdog);
-    const session = this.session;
-    this.session = null;
-    if (!session) return;
-    try {
-      session.recognition.stop();
-    } catch {}
-  }
-
-  finish() {
-    clearTimeout(this.silenceTimer);
-    const text = this.text.trim();
-    this.text = '';
-    this.active = false;
-    this.closeSession();
-    this.onStateChange?.();
-    if (text) this.onUtterance?.(text);
+    this.onUtterance?.(text);
   }
 }
 

@@ -61,14 +61,10 @@ const EXAMPLES = [
   '식당에서 주문한 음식과 다른 게 나왔어',
 ];
 
-// iPhone and iPad browsers only let a tap open the microphone.
-const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-
 const settings = {
   dailyCount: 10,
   speechRate: 0.9,
   level: 'intermediate',
-  listenMode: isIOS ? 'tap' : 'auto',
   ...store.get('settings', {}),
 };
 const saveSettings = () => store.set('settings', settings);
@@ -220,6 +216,7 @@ const ICON = {
   close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   bulb: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.4 1 1.1 1 1.8V16h5v-.3c0-.7.4-1.4 1-1.8A6 6 0 0 0 12 3z"/></svg>',
   stop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>',
+  send: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg>',
   external: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
 };
 
@@ -301,7 +298,7 @@ function renderToday() {
           </div>
         </div>
         <button type="button" class="btn start" data-action="start-talk">${ICON.mic}Start talking</button>
-        <span class="hint">버튼 없이 말하면 돼요 · 말을 멈추면 상대가 답해요</span>
+        <span class="hint">마이크 버튼을 누르고 말한 뒤, 다 말하면 다시 누르세요</span>
       </section>
       <section>
         <h2 class="section-title">오늘의 표현 ${expressions.length}개</h2>
@@ -386,7 +383,7 @@ function renderSituation() {
       <div class="row-actions">
         ${
           canListen
-            ? `<button type="button" class="btn ${sit.listening ? 'recording' : ''}" data-action="sit-mic">${sit.listening ? `${ICON.stop}듣는 중 · 탭하면 멈춰요` : `${ICON.mic}한국어로 말하기`}</button>`
+            ? `<button type="button" class="btn ${sit.listening ? 'recording' : ''}" data-action="sit-mic">${sit.listening ? `${ICON.stop}듣는 중 · 다 말했으면 누르세요` : `${ICON.mic}한국어로 말하기`}</button>`
             : ''
         }
         <button type="button" class="btn primary" data-action="sit-find" ${sit.loading ? 'disabled' : ''}>표현 찾기</button>
@@ -434,10 +431,6 @@ function renderSettings() {
     ${segmented('set-rate', RATES.map((r) => [r, rateLabel(r)]), settings.speechRate, '말하기 속도')}
     <button type="button" class="btn wide" data-action="preview-voice">${ICON.speaker}이 속도로 미리 듣기</button>
     <p class="footnote">대화 중에도 화면 위쪽 속도 버튼으로 바로 바꿀 수 있어요. 더 자연스러운 목소리는 iPhone 설정 &gt; 손쉬운 사용 &gt; 읽기 및 말하기 &gt; 음성 &gt; 영어(미국)에서 '향상된' 음성을 내려받으면 돼요.</p>
-
-    <h2 class="section-title">대화 방식</h2>
-    ${segmented('set-listen', [['tap', '탭하고 말하기'], ['auto', '자동으로 듣기']], settings.listenMode, '대화 방식')}
-    <p class="footnote">${isIOS ? 'iPhone Safari는 화면을 탭한 직후에만 마이크를 열 수 있어요. 그래서 내 차례마다 가운데 버튼을 한 번 탭하는 방식을 추천해요.' : '자동으로 듣기는 상대 말이 끝나면 마이크가 저절로 켜져요. 잘 안 되면 탭하고 말하기로 바꿔 주세요.'}</p>
 
     <h2 class="section-title">난이도</h2>
     ${segmented('set-level', LEVEL_ORDER.map((l) => [l, LEVELS[l].label]), settings.level, '난이도')}
@@ -554,7 +547,6 @@ function openTalk(scenario, expressions) {
     level: LEVELS[settings.level].guide,
     rate: settings.speechRate,
     apiKey: apiKey(),
-    handsFree: settings.listenMode === 'auto',
     onChange: updateTalk,
   });
   $talk.className = 'talk';
@@ -595,35 +587,47 @@ function updateTalk() {
   if (!conversation) return;
   const c = conversation;
   const name = c.scenario.partnerName;
+  const mic = c.micState;
+  const turn = {
+    idle: ['내 차례예요', '마이크 버튼을 누르고 말하세요'],
+    recording: ['듣고 있어요 · 천천히 말해도 돼요', '다 말했으면 버튼을 다시 누르세요'],
+    finishing: ['보내는 중…', ''],
+    paused: c.heard
+      ? ['마이크가 꺼졌어요', '버튼을 누르면 지금까지 말한 걸 보내요']
+      : ['마이크가 꺼졌어요', '버튼을 누르고 다시 말해 주세요'],
+  }[mic];
   const status = {
     idle: '준비 중…',
-    listening: c.micReady ? '듣고 있어요 · 편하게 말하세요' : c.micNeedsTap ? '내 차례예요 · 가운데 버튼을 탭하고 말하세요' : '마이크 여는 중…',
+    listening: turn[0],
     thinking: `${name} 생각 중…`,
     speaking: `${name} 말하는 중`,
   }[c.phase];
   const caption = {
     idle: '',
-    listening: c.micReady
-      ? '말을 멈추면 자동으로 보내요 · 탭하면 바로 보내요'
-      : c.micNeedsTap
-        ? '탭하면 마이크가 켜져요'
-        : '잠시만요…',
-    thinking: '탭하면 상대 말을 끊고 바로 말할 수 있어요',
-    speaking: '탭하면 상대 말을 끊고 바로 말할 수 있어요',
+    listening: turn[1],
+    thinking: '버튼을 누르면 상대 말을 끊고 바로 말할 수 있어요',
+    speaking: '버튼을 누르면 상대 말을 끊고 바로 말할 수 있어요',
   }[c.phase];
   document.getElementById('talk-status').textContent = status;
   document.getElementById('talk-caption').textContent = caption;
   document.getElementById('talk-rate').textContent = rateLabel(settings.speechRate);
   document.getElementById('talk-used').textContent = `표현 ${c.used.size}/${c.expressions.length}`;
   const orb = document.getElementById('talk-orb');
-  orb.dataset.phase = c.micNeedsTap ? 'tap' : c.phase === 'listening' && !c.micReady ? 'opening' : c.phase;
-  orb.setAttribute('aria-label', caption || '준비 중');
+  const recording = c.phase === 'listening' && (mic === 'recording' || mic === 'finishing');
+  const phase = c.phase === 'listening' ? (recording ? 'recording' : 'tap') : c.phase;
+  if (orb.dataset.phase !== phase) {
+    orb.dataset.phase = phase;
+    orb.innerHTML = recording ? ICON.send : ICON.mic;
+  }
+  orb.setAttribute('aria-label', recording ? '다 말했어요, 보내기' : c.phase === 'listening' ? '마이크 켜고 말하기' : '상대 말 끊고 말하기');
   document.getElementById('talk-avatar').dataset.speaking = String(c.phase === 'speaking');
 
   const lines = c.lines
     .map((line) => `<p class="bubble ${line.role === 'user' ? 'me' : 'them'}">${esc(line.text || '…')}</p>`)
     .join('');
-  const live = c.phase === 'listening' && c.heard ? `<p class="bubble me live">${esc(c.heard)}</p>` : '';
+  const live = c.phase === 'listening' && mic !== 'idle'
+    ? `<p class="bubble me live">${esc(c.heard || '…')}</p>`
+    : '';
   const $lines = document.getElementById('talk-lines');
   $lines.innerHTML = lines + live;
   $lines.scrollTop = $lines.scrollHeight;
@@ -798,20 +802,18 @@ Give 3 natural expressions or short sentences for exactly this situation in that
 
 function toggleDictation() {
   if (state.sit.listening) {
-    stopDictation();
+    // Second tap: finish and keep what was heard.
+    if (dictation) dictation.finish();
+    else stopDictation();
     render();
     return;
   }
   state.sit.error = '';
   dictation = new Listener({
     lang: 'ko-KR',
-    silenceMs: 1600,
-    autoReopen: false,
     onStateChange: () => {
-      if (dictation?.needsTap) {
-        stopDictation();
-        if (state.tab === 'situation') render();
-      }
+      // The browser closed the mic early: keep what was heard.
+      if (dictation?.state === 'paused') dictation.finish();
     },
     onPartial: (text) => {
       state.sit.text = text;
@@ -819,7 +821,7 @@ function toggleDictation() {
       if (box) box.value = text;
     },
     onUtterance: (text) => {
-      state.sit.text = text;
+      if (text) state.sit.text = text;
       state.sit.listening = false;
       dictation = null;
       if (state.tab === 'situation') render();
@@ -832,16 +834,15 @@ function toggleDictation() {
     },
   });
   state.sit.listening = true;
-  dictation.start({ fromTap: true });
+  dictation.start();
   render();
 }
 
 function stopDictation() {
-  // Clear the reference first: stop() reports a state change, which calls back here.
   const listener = dictation;
   dictation = null;
   state.sit.listening = false;
-  listener?.stop();
+  listener?.cancel();
 }
 
 function startSituationRolePlay() {
@@ -895,11 +896,6 @@ const actions = {
   },
   'set-rate': (el) => {
     settings.speechRate = Number(el.dataset.value);
-    saveSettings();
-    render();
-  },
-  'set-listen': (el) => {
-    settings.listenMode = el.dataset.value;
     saveSettings();
     render();
   },
