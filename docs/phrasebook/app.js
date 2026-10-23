@@ -264,6 +264,16 @@ async function findPhrases() {
     return;
   }
   document.activeElement?.blur?.();
+  // The same situation and tone asked before costs nothing the second time.
+  const cacheKey = `${sit.tone}|${situation}`;
+  const saved = store.get('answers', []).find((entry) => entry.key === cacheKey);
+  if (saved) {
+    sit.phrases = saved.phrases;
+    sit.searched = situation;
+    sit.error = '';
+    render();
+    return;
+  }
   sit.loading = true;
   sit.error = '';
   render();
@@ -282,9 +292,12 @@ Give 3 natural expressions or short sentences for exactly this situation in that
 - tip: one short Korean sentence on its nuance or when to use it`,
       schema: PHRASES_SCHEMA,
       effort: 'low',
+      maxTokens: 3000,
     });
     sit.phrases = result.phrases;
     sit.searched = situation;
+    const answers = store.get('answers', []).filter((entry) => entry.key !== cacheKey);
+    store.set('answers', [{ key: cacheKey, phrases: result.phrases }, ...answers].slice(0, 50));
   } catch (error) {
     sit.error = error.message;
   } finally {

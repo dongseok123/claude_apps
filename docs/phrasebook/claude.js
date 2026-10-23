@@ -2,8 +2,8 @@
 const API = 'https://api.anthropic.com/v1/messages';
 
 export const MODELS = {
-  // Model for phrase suggestions.
-  coach: 'claude-opus-5-5',
+  // Model for phrase suggestions: the lowest-cost model, which handles this short task well.
+  coach: 'claude-haiku-5-5',
 };
 
 export const S = {
