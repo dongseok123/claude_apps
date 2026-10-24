@@ -63,8 +63,31 @@ const PHRASES_SCHEMA = S.obj({
 const settings = { speechRate: 0.9, ...store.get('settings', {}) };
 const saveSettings = () => store.set('settings', settings);
 
+// ---------- Saved items for review ----------
+
+const savedItems = () => store.get('saved', []);
+const findSaved = (kind, en) => savedItems().find((item) => item.kind === kind && item.en === en);
+
+function addSaved(item) {
+  store.set('saved', [{ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, savedAt: Date.now(), ...item }, ...savedItems()]);
+}
+
+function removeSaved(id) {
+  const items = savedItems();
+  const index = items.findIndex((item) => item.id === id);
+  if (index < 0) return null;
+  const [removed] = items.splice(index, 1);
+  store.set('saved', items);
+  return { item: removed, index };
+}
+
+function updateSaved(id, changes) {
+  store.set('saved', savedItems().map((item) => (item.id === id ? { ...item, ...changes } : item)));
+}
+
 const state = {
   tab: 'situation',
+  review: { filter: 'all', hide: false, revealed: new Set(), lastRemoved: null },
   dict: { query: '', searched: '', source: store.get('dictSource', 'naver') },
   sit: { text: '', tone: 'neutral', phrases: [], searched: '', loading: false, error: '' },
 };
@@ -75,18 +98,23 @@ const $toast = document.getElementById('toast');
 const esc = (value) =>
   String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
-function toast(message) {
-  $toast.textContent = message;
+function toast(message, undo = false) {
+  $toast.innerHTML = undo
+    ? `<span>${esc(message)}</span><button type="button" data-action="undo-remove">되돌리기</button>`
+    : esc(message);
   $toast.hidden = false;
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => {
     $toast.hidden = true;
-  }, 2200);
+  }, undo ? 4000 : 2200);
 }
 
 const ICON = {
   speaker: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></svg>',
   copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg>',
+  bookmark: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg>',
+  bookmarked: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z" fill="currentColor"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
   external: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
 };
 
@@ -94,6 +122,9 @@ const speakButton = (text) =>
   canSpeak
     ? `<button type="button" class="icon-btn" data-action="say" data-text="${esc(text)}" aria-label="원어민 발음 듣기">${ICON.speaker}</button>`
     : '';
+
+const saveButton = (action, saved, extra = '') =>
+  `<button type="button" class="icon-btn ${saved ? 'saved' : ''}" data-action="${action}" ${extra} aria-pressed="${saved}" aria-label="${saved ? '저장됨, 누르면 저장 취소' : '복습용으로 저장'}">${saved ? ICON.bookmarked : ICON.bookmark}</button>`;
 
 const segmented = (action, options, current, label) => `
   <div class="segmented" role="group" aria-label="${esc(label)}">
@@ -144,11 +175,12 @@ function renderSituation() {
           <ul class="list phrases">
             ${sit.phrases
               .map(
-                (p) => `
+                (p, i) => `
               <li class="phrase">
                 <div class="phrase-head">
                   <strong>${esc(p.en)}</strong>
                   <div class="phrase-actions">
+                    ${saveButton('save-phrase', Boolean(findSaved('phrase', p.en)), `data-index="${i}"`)}
                     ${speakButton(p.en)}
                     <button type="button" class="icon-btn" data-action="copy" data-text="${esc(p.en)}" aria-label="복사">${ICON.copy}</button>
                   </div>
@@ -158,7 +190,8 @@ function renderSituation() {
               </li>`,
               )
               .join('')}
-          </ul>`
+          </ul>
+          <p class="footnote">🔖 를 누르면 복습 탭에 저장돼요.</p>`
         : sit.loading
           ? ''
           : `<h2 class="section-title">예시 상황</h2>
@@ -190,7 +223,10 @@ function renderDictionary() {
         ? `<section class="card dict-result">
             <div class="dict-word">
               <strong>${esc(searched)}</strong>
-              ${isEnglish && canSpeak ? `<button type="button" class="btn small" data-action="say" data-text="${esc(searched)}">${ICON.speaker}미국식 발음</button>` : ''}
+              <div class="phrase-actions">
+                ${isEnglish && canSpeak ? `<button type="button" class="btn small" data-action="say" data-text="${esc(searched)}">${ICON.speaker}미국식 발음</button>` : ''}
+                ${saveButton('save-word', Boolean(findSaved('word', searched)))}
+              </div>
             </div>
             <div class="dict-links">
               ${Object.entries(DICTIONARIES)
@@ -202,6 +238,76 @@ function renderDictionary() {
             <p>단어를 검색하면 네이버 · 다음 · Cambridge 영한사전의 최신 내용을 바로 열어 드려요.</p>
           </section>`
     }`;
+}
+
+function renderReview() {
+  const { filter, hide, revealed } = state.review;
+  const all = savedItems();
+  const items = all.filter((item) => filter === 'all' || item.kind === filter);
+  const toneLabel = (tone) => TONES[tone]?.label || '';
+  const date = (time) => {
+    const d = new Date(time);
+    return `${d.getMonth() + 1}월 ${d.getDate()}일`;
+  };
+  const card = (item) => {
+    if (item.kind === 'word') {
+      return `
+        <li class="phrase saved-item">
+          <div class="phrase-head">
+            <strong>${esc(item.en)}</strong>
+            <div class="phrase-actions">
+              ${speakButton(item.en)}
+              <button type="button" class="icon-btn" data-action="remove-saved" data-id="${esc(item.id)}" aria-label="삭제">${ICON.trash}</button>
+            </div>
+          </div>
+          <label class="visually-hidden" for="memo-${esc(item.id)}">뜻 메모</label>
+          <input class="memo" id="memo-${esc(item.id)}" data-memo="${esc(item.id)}" value="${esc(item.memo || '')}" placeholder="뜻 메모 (예: 정신없이 바쁜)">
+          <div class="mini-links">
+            ${Object.values(DICTIONARIES).map((d) => `<a href="${esc(d.url(item.en))}" target="_blank" rel="noopener">${esc(d.label)}</a>`).join('')}
+            <span class="muted">단어 · ${date(item.savedAt)}</span>
+          </div>
+        </li>`;
+    }
+    const shown = !hide || revealed.has(item.id);
+    return `
+      <li class="phrase saved-item">
+        <span class="context">${esc(item.situation || '')}${item.tone ? ` · ${esc(toneLabel(item.tone))}` : ''}</span>
+        <div class="phrase-head">
+          ${
+            shown
+              ? `<strong>${esc(item.en)}</strong>`
+              : `<button type="button" class="reveal" data-action="reveal" data-id="${esc(item.id)}">영어로 어떻게 말할까요? 눌러서 보기</button>`
+          }
+          <div class="phrase-actions">
+            ${shown ? speakButton(item.en) : ''}
+            <button type="button" class="icon-btn" data-action="remove-saved" data-id="${esc(item.id)}" aria-label="삭제">${ICON.trash}</button>
+          </div>
+        </div>
+        <span class="muted">${esc(item.ko)}</span>
+        ${shown && item.tip ? `<p class="tip">${esc(item.tip)}</p>` : ''}
+        <span class="muted small">${date(item.savedAt)}</span>
+      </li>`;
+  };
+  return `
+    <header class="page-head">
+      <div>
+        <span class="muted">저장한 표현과 단어를 다시 봐요</span>
+        <h1>복습</h1>
+      </div>
+      <span class="pill">${all.length}개</span>
+    </header>
+    ${segmented('review-filter', [['all', '전체'], ['phrase', '표현'], ['word', '단어']], filter, '보기')}
+    <button type="button" class="btn wide ${hide ? 'primary' : ''}" data-action="review-hide" aria-pressed="${hide}">
+      ${hide ? '영어 다시 모두 보기' : '영어 가리고 복습하기'}
+    </button>
+    ${
+      items.length
+        ? `<ul class="list phrases">${items.map(card).join('')}</ul>`
+        : `<section class="card empty">
+            <p>${all.length ? '이 종류로 저장한 게 아직 없어요.' : '아직 저장한 게 없어요. 상황 표현 결과나 사전 검색 결과에서 🔖 를 누르면 여기에 모여요.'}</p>
+          </section>`
+    }
+    <p class="footnote">저장한 내용은 이 기기의 브라우저에만 남아요. Safari의 방문 기록과 웹사이트 데이터를 지우면 함께 사라져요.</p>`;
 }
 
 function renderSettings() {
@@ -235,7 +341,7 @@ function renderSettings() {
     </section>`;
 }
 
-const TABS = { situation: renderSituation, dictionary: renderDictionary, settings: renderSettings };
+const TABS = { situation: renderSituation, dictionary: renderDictionary, review: renderReview, settings: renderSettings };
 
 function render() {
   $view.innerHTML = TABS[state.tab]();
@@ -330,6 +436,61 @@ async function copy(text) {
 }
 
 const actions = {
+  'save-phrase': (el) => {
+    const sit = state.sit;
+    const phrase = sit.phrases[Number(el.dataset.index)];
+    if (!phrase) return;
+    const existing = findSaved('phrase', phrase.en);
+    if (existing) {
+      removeSaved(existing.id);
+      toast('저장을 취소했어요');
+    } else {
+      addSaved({ kind: 'phrase', en: phrase.en, ko: phrase.ko, tip: phrase.tip, situation: sit.searched, tone: sit.tone });
+      toast('복습 탭에 저장했어요');
+    }
+    render();
+  },
+  'save-word': () => {
+    const word = state.dict.searched;
+    if (!word) return;
+    const existing = findSaved('word', word);
+    if (existing) {
+      removeSaved(existing.id);
+      toast('저장을 취소했어요');
+    } else {
+      addSaved({ kind: 'word', en: word, memo: '' });
+      toast('복습 탭에 저장했어요');
+    }
+    render();
+  },
+  'remove-saved': (el) => {
+    state.review.lastRemoved = removeSaved(el.dataset.id);
+    render();
+    toast('삭제했어요', true);
+  },
+  'undo-remove': () => {
+    const removed = state.review.lastRemoved;
+    if (!removed) return;
+    const items = savedItems();
+    items.splice(removed.index, 0, removed.item);
+    store.set('saved', items);
+    state.review.lastRemoved = null;
+    $toast.hidden = true;
+    render();
+  },
+  'review-filter': (el) => {
+    state.review.filter = el.dataset.value;
+    render();
+  },
+  'review-hide': () => {
+    state.review.hide = !state.review.hide;
+    state.review.revealed = new Set();
+    render();
+  },
+  reveal: (el) => {
+    state.review.revealed.add(el.dataset.id);
+    render();
+  },
   say: (el) => speak(el.dataset.text, settings.speechRate),
   copy: (el) => copy(el.dataset.text),
   'set-rate': (el) => {
@@ -382,6 +543,11 @@ document.addEventListener('submit', (event) => {
     toast('API 키를 저장했어요');
     render();
   }
+});
+
+document.addEventListener('change', (event) => {
+  const id = event.target.dataset?.memo;
+  if (id) updateSaved(id, { memo: event.target.value.trim() });
 });
 
 document.addEventListener('input', (event) => {

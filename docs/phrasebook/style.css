@@ -171,7 +171,7 @@ textarea { width: 100%; resize: vertical; line-height: 1.45; }
 
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
   background: var(--surface); border-top: 1px solid var(--line);
   padding-bottom: env(safe-area-inset-bottom, 0px);
   padding-left: env(safe-area-inset-left, 0px);
@@ -198,3 +198,16 @@ textarea { width: 100%; resize: vertical; line-height: 1.45; }
 
 .phrase-actions { display: flex; gap: 6px; flex: none; }
 .intro { margin: 0; color: var(--muted); font-size: 0.9rem; }
+.icon-btn.saved { background: var(--orange-soft); color: var(--orange); }
+.saved-item .context { font-size: 0.78rem; font-weight: 700; color: var(--accent); }
+.reveal {
+  flex: 1; min-width: 0; min-height: 44px; text-align: left; padding: 8px 12px; border-radius: 10px;
+  border: 1.5px dashed var(--line); background: var(--bg); color: var(--muted); font-weight: 600;
+}
+.memo { min-height: 40px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); font-size: 0.95rem; }
+.mini-links { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 0.85rem; }
+.mini-links a { color: var(--accent); font-weight: 700; }
+.mini-links .muted { margin-left: auto; }
+.muted.small { font-size: 0.75rem; }
+.toast { display: inline-flex; align-items: center; gap: 12px; }
+.toast button { border: 0; background: none; color: var(--accent-soft); font-weight: 800; text-decoration: underline; padding: 4px; }
